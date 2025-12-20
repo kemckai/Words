@@ -64,6 +64,9 @@ def load_words(path: str) -> List[Tuple[str, str]]:
 def pick_word_for_today(pairs: List[Tuple[str, str]]) -> Tuple[str, str]:
     """
     Deterministically pick a 'random' word for today.
+    
+    Uses the current date as a seed, so the same word is shown all day,
+    and a new random word is selected every 24 hours (at midnight).
 
     If a chosen entry fails validation/display prep, we advance to a new
     candidate (by tweaking the hash input) up to a reasonable attempt limit.
@@ -203,7 +206,8 @@ def main() -> None:
         create_window(word, definition)
     except Exception as exc:  # noqa: BLE001
         # If anything goes wrong, show an explanatory error card instead of crashing.
-        create_error_window(f"Unable to load today's word:\\n{exc}")
+        error_msg = f"Unable to load today's word:\n{exc}"
+        create_error_window(error_msg)
 
 
 if __name__ == "__main__":
