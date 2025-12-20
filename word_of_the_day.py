@@ -10,6 +10,8 @@ top-left of the screen.
 import datetime as _dt
 import hashlib
 import os
+import random
+import time
 import tkinter as tk
 from tkinter import font as tkfont
 from typing import List, Tuple
@@ -61,7 +63,7 @@ def load_words(path: str) -> List[Tuple[str, str]]:
     return pairs
 
 
-def pick_word_for_today(pairs: List[Tuple[str, str]]) -> Tuple[str, str]:
+def pick_word_for_today(pairs: List[Tuple[str, str]], retry_offset: int = 0) -> Tuple[str, str]:
     """
     Deterministically pick a 'random' word for today.
     
@@ -70,12 +72,16 @@ def pick_word_for_today(pairs: List[Tuple[str, str]]) -> Tuple[str, str]:
 
     If a chosen entry fails validation/display prep, we advance to a new
     candidate (by tweaking the hash input) up to a reasonable attempt limit.
+    
+    Args:
+        pairs: List of (word, definition) tuples
+        retry_offset: Additional offset to use when retrying after an error
     """
     today = _dt.date.today().isoformat()
     n = len(pairs)
 
     def index_for_attempt(attempt: int) -> int:
-        key = f"{today}:{attempt}".encode("utf-8")
+        key = f"{today}:{attempt}:{retry_offset}".encode("utf-8")
         h = hashlib.sha256(key).hexdigest()
         return int(h, 16) % n
 
@@ -102,8 +108,19 @@ def pick_word_for_today(pairs: List[Tuple[str, str]]) -> Tuple[str, str]:
     raise RuntimeError(f"Unable to select a valid word for today: {last_error}")
 
 
-def create_window(word: str, definition: str) -> None:
-    """Create and display the tkinter window with the given word and definition."""
+def get_ms_until_next_midnight() -> int:
+    """Calculate milliseconds until the next midnight."""
+    now = _dt.datetime.now()
+    tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + _dt.timedelta(days=1)
+    delta = tomorrow - now
+    return int(delta.total_seconds() * 1000)
+
+
+def create_window(word: str, definition: str, pairs: List[Tuple[str, str]]) -> None:
+    """
+    Create and display the tkinter window with the given word and definition.
+    Sets up automatic refresh every 24 hours and error recovery.
+    """
     root = tk.Tk()
     root.title("Word of the Day")
 
@@ -111,6 +128,9 @@ def create_window(word: str, definition: str) -> None:
     bg_color = "#000000"
     fg_color = "#FFFFFF"
     root.configure(bg=bg_color)
+
+    # Set window transparency to 40% opacity (60% transparent)
+    root.attributes('-alpha', 0.4)
 
     # Disable resizing
     root.resizable(False, False)
@@ -162,52 +182,59 @@ def create_window(word: str, definition: str) -> None:
     geometry = f"{width}x{height}+{x_offset}+{y_offset}"
     root.geometry(geometry)
 
-    root.mainloop()
+    def refresh_word(retry_offset: int = 0) -> None:
+        """Refresh the word and definition, retrying on error with different random word."""
+        try:
+            new_word, new_definition = pick_word_for_today(pairs, retry_offset=retry_offset)
+            word_label.config(text=new_word)
+            definition_label.config(text=new_definition)
+            
+            # Recalculate window size in case text changed
+            root.update_idletasks()
+            new_width = root.winfo_width()
+            new_height = root.winfo_height()
+            root.geometry(f"{new_width}x{new_height}+{x_offset}+{y_offset}")
+        except Exception:  # noqa: BLE001
+            # If error occurs, retry after a short delay (5 seconds) with random offset
+            new_retry_offset = random.randint(1000, 9999)
+            root.after(5000, lambda o=new_retry_offset: refresh_word(o))
+            return
+        
+        # Schedule next refresh for 24 hours from now (normal refresh uses default offset=0)
+        ms_until_midnight = get_ms_until_next_midnight()
+        root.after(ms_until_midnight, lambda: refresh_word(0))
 
-
-def create_error_window(message: str) -> None:
-    """Show a simple window explaining that the word couldn't be loaded."""
-    root = tk.Tk()
-    root.title("Word of the Day — Error")
-    bg_color = "#000000"
-    fg_color = "#FFFFFF"
-    root.configure(bg=bg_color)
-    root.resizable(False, False)
-
-    msg_font = tkfont.Font(family="Helvetica", size=14)
-
-    label = tk.Label(
-        root,
-        text=message,
-        font=msg_font,
-        fg=fg_color,
-        bg=bg_color,
-        anchor="w",
-        justify="left",
-        wraplength=420,
-    )
-    label.pack(padx=16, pady=16)
-
-    root.update_idletasks()
-    width = root.winfo_width()
-    height = root.winfo_height()
-    x_offset = 20
-    y_offset = 40
-    geometry = f"{width}x{height}+{x_offset}+{y_offset}"
-    root.geometry(geometry)
+    # Schedule first refresh for 24 hours from now
+    ms_until_midnight = get_ms_until_next_midnight()
+    root.after(ms_until_midnight, refresh_word)
 
     root.mainloop()
+
+
 
 
 def main() -> None:
-    try:
-        pairs = load_words(WORDS_FILE)
-        word, definition = pick_word_for_today(pairs)
-        create_window(word, definition)
-    except Exception as exc:  # noqa: BLE001
-        # If anything goes wrong, show an explanatory error card instead of crashing.
-        error_msg = f"Unable to load today's word:\n{exc}"
-        create_error_window(error_msg)
+    """Main entry point. Loads words and creates window, retrying on errors."""
+    max_retries = 10
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            pairs = load_words(WORDS_FILE)
+            # Use a random offset for initial word selection
+            retry_offset = random.randint(0, 9999) if retry_count > 0 else 0
+            word, definition = pick_word_for_today(pairs, retry_offset=retry_offset)
+            create_window(word, definition, pairs)
+            # If we get here, window was closed normally
+            return
+        except Exception:  # noqa: BLE001
+            retry_count += 1
+            if retry_count < max_retries:
+                # Wait 5 seconds before retrying
+                time.sleep(5)
+            else:
+                # After max retries, re-raise to let Python handle it
+                raise
 
 
 if __name__ == "__main__":
