@@ -11,6 +11,7 @@ import datetime as _dt
 import hashlib
 import os
 import random
+import subprocess
 import time
 import tkinter as tk
 from tkinter import font as tkfont
@@ -116,6 +117,15 @@ def get_ms_until_next_midnight() -> int:
     return int(delta.total_seconds() * 1000)
 
 
+def pronounce_word(word: str) -> None:
+    """Use macOS's 'say' command to pronounce the word."""
+    try:
+        subprocess.run(['say', word], check=False)
+    except Exception:  # noqa: BLE001
+        # Silently fail if say command is unavailable or fails
+        pass
+
+
 def create_window(word: str, definition: str, pairs: List[Tuple[str, str]]) -> None:
     """
     Create and display the tkinter window with the given word and definition.
@@ -146,6 +156,12 @@ def create_window(word: str, definition: str, pairs: List[Tuple[str, str]]) -> N
     container = tk.Frame(root, bg=bg_color)
     container.pack(fill="both", expand=True, padx=pad_x, pady=pad_y)
 
+    # Dynamically choose a reasonable wrap length based on screen width so
+    # very long definitions can expand vertically without being cut off.
+    screen_width = root.winfo_screenwidth()
+    # Keep some margin at the right side of the screen
+    max_width = max(300, screen_width - (pad_x * 2) - 80)
+
     word_label = tk.Label(
         container,
         text=word,
@@ -154,9 +170,13 @@ def create_window(word: str, definition: str, pairs: List[Tuple[str, str]]) -> N
         bg=bg_color,
         anchor="w",
         justify="left",
-        wraplength=400,
+        wraplength=max_width,
+        cursor="hand2",
     )
     word_label.pack(anchor="w")
+    
+    # Bind click event to pronounce the word
+    word_label.bind("<Button-1>", lambda event: pronounce_word(word))
 
     definition_label = tk.Label(
         container,
@@ -166,21 +186,28 @@ def create_window(word: str, definition: str, pairs: List[Tuple[str, str]]) -> N
         bg=bg_color,
         anchor="w",
         justify="left",
-        wraplength=400,
+        wraplength=max_width,
     )
     definition_label.pack(anchor="w", pady=(8, 0))
 
-    # Let tkinter compute size, then move window near top-left
+    # Let tkinter compute size, then move window near top-left.
+    # We do NOT hard-code width/height, so the window always autosizes to fit
+    # the full word and definition, no matter how big or small they are.
     root.update_idletasks()
-
-    width = root.winfo_width()
-    height = root.winfo_height()
 
     # Offset in from absolute top-left to avoid menu bar and hard edge
     x_offset = 20
     y_offset = 40
-    geometry = f"{width}x{height}+{x_offset}+{y_offset}"
-    root.geometry(geometry)
+    # Only specify position, let Tk use the computed size.
+    root.geometry(f"+{x_offset}+{y_offset}")
+    
+    # Ensure window is visible and brought to front on macOS
+    root.deiconify()
+    root.lift()
+    root.focus_force()
+    root.attributes('-topmost', True)
+    root.update()
+    root.after_idle(lambda: root.attributes('-topmost', False))
 
     def refresh_word(retry_offset: int = 0) -> None:
         """Refresh the word and definition, retrying on error with different random word."""
@@ -189,11 +216,13 @@ def create_window(word: str, definition: str, pairs: List[Tuple[str, str]]) -> N
             word_label.config(text=new_word)
             definition_label.config(text=new_definition)
             
-            # Recalculate window size in case text changed
+            # Update click handler to use the new word
+            word_label.bind("<Button-1>", lambda event, w=new_word: pronounce_word(w))
+            
+            # Recalculate window size in case text changed; again, do not
+            # force a specific width/height so Tk can resize to fit content.
             root.update_idletasks()
-            new_width = root.winfo_width()
-            new_height = root.winfo_height()
-            root.geometry(f"{new_width}x{new_height}+{x_offset}+{y_offset}")
+            root.geometry(f"+{x_offset}+{y_offset}")
         except Exception:  # noqa: BLE001
             # If error occurs, retry after a short delay (5 seconds) with random offset
             new_retry_offset = random.randint(1000, 9999)
