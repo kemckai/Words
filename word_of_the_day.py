@@ -23,6 +23,25 @@ WORDS_FILE = os.path.join(
     "Words_alphabetized.txt",
 )
 
+NOTE_NAME = "Words"
+NOTE_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Words_from_notes.txt")
+
+
+def refresh_from_notes() -> str:
+    """Export the Apple Notes note NOTE_NAME to NOTE_CACHE; fall back to WORDS_FILE."""
+    try:
+        out = subprocess.run(
+            ["osascript", "-e", f'tell application "Notes" to get plaintext of first note whose name is "{NOTE_NAME}"'],
+            capture_output=True, text=True, timeout=60,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            with open(NOTE_CACHE, "w", encoding="utf-8") as f:
+                f.write(out.stdout)
+            return NOTE_CACHE
+    except Exception:
+        pass
+    return NOTE_CACHE if os.path.exists(NOTE_CACHE) else WORDS_FILE
+
 
 def load_words(path: str) -> List[Tuple[str, str]]:
     """Load (word, definition) pairs from the given file."""
@@ -249,7 +268,7 @@ def main() -> None:
     
     while retry_count < max_retries:
         try:
-            pairs = load_words(WORDS_FILE)
+            pairs = load_words(refresh_from_notes())
             # Use a random offset for initial word selection
             retry_offset = random.randint(0, 9999) if retry_count > 0 else 0
             word, definition = pick_word_for_today(pairs, retry_offset=retry_offset)
